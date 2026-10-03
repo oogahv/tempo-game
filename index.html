@@ -816,7 +816,7 @@ button:focus-visible{outline:3px solid var(--early); outline-offset:2px}
   const MAJ=[6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88];
   const MIN=[6.33,2.68,3.52,5.38,2.60,3.53,2.54,4.75,3.98,2.69,3.34,3.17];
   const MAJS=[0,2,4,5,7,9,11], MINS=[0,2,3,5,7,8,10];
-  const chromaAcc=new Float64Array(12); let chromaFrames=0, fbuf=null;
+  const chromaAcc=new Float64Array(12), bassAcc=new Float64Array(12); let chromaFrames=0, fbuf=null;
   (function buildChroma(){
     const c=$('chroma');
     NAMES.forEach(n=>{ const d=document.createElement('div'); d.className='bar'; d.innerHTML=`<i></i><span>${n}</span>`; c.appendChild(d); });
@@ -826,17 +826,21 @@ button:focus-visible{outline:3px solid var(--early); outline-offset:2px}
     const an=mic.an; if(!fbuf) fbuf=new Float32Array(an.frequencyBinCount);
     an.getFloatFrequencyData(fbuf);
     const binHz=ctx.sampleRate/an.fftSize;
-    const c=new Float64Array(12); let max=-Infinity;
-    const k0=Math.ceil(65/binHz), k1=Math.min(fbuf.length-1, Math.floor(1300/binHz));
+    const c=new Float64Array(12), bc=new Float64Array(12); let max=-Infinity;
+    const k0=Math.ceil(40/binHz), k1=Math.min(fbuf.length-1, Math.floor(1300/binHz));
     for(let k=k0;k<=k1;k++){
       const db=fbuf[k]; if(db>max) max=db; if(db<-85) continue;
       const m=69+12*Math.log2(k*binHz/440), r=Math.round(m), w=1-2*Math.abs(m-r);
       if(w<=0) continue;
-      const mag=Math.pow(10,db/20); c[((r%12)+12)%12]+=mag*mag*w;
+      const mag=Math.pow(10,db/20), pc=((r%12)+12)%12, f=k*binHz;
+      if(f<=260) bc[pc]+=mag*mag*w;
+      if(f>=65) c[pc]+=mag*mag*w;
     }
     if(max<-55) return;
     let sum=0; for(const v of c) sum+=v; if(!sum) return;
     for(let i=0;i<12;i++) chromaAcc[i]+=c[i]/sum;
+    let bs=0; for(const v of bc) bs+=v;
+    if(bs) for(let i=0;i<12;i++) bassAcc[i]+=bc[i]/bs;
     chromaFrames++;
   }
   function pearson(a,b){
@@ -856,10 +860,19 @@ button:focus-visible{outline:3px solid var(--early); outline-offset:2px}
     }
     cand.sort((a,b)=>b.r-a.r);
     const name=c=>`${NAMES[c.t]} ${c.maj?'major':'minor'}`;
-    const best=cand[0], second=cand[1];
+    // A key and its relative (D major / B minor) share every note.
+    // Break the tie with the bass: bass lines lean on the home note.
+    const top=cand[0];
+    const relT = top.maj ? (top.t+9)%12 : (top.t+3)%12;
+    const rel = cand.find(c=>c.t===relT && c.maj!==top.maj);
+    const bmax=Math.max(...bassAcc)||1;
+    const sc = c => c.r + 0.35*(bassAcc[c.t]/bmax);
+    const best = sc(rel)>sc(top) ? rel : top;
+    const other = best===top ? rel : top;
+    const third = cand.find(c=>c!==top && c!==rel);
     $('lvKey').textContent=name(best);
-    $('lvKeyAlt').textContent = best.r<0.5 ? 'Low confidence. Play longer or more chords.'
-      : best.r-second.r<0.06 ? `Close call with ${name(second)}` : `Confidence ${Math.round(best.r*100)}%`;
+    $('lvKeyAlt').textContent = top.r<0.5 ? 'Low confidence. Play longer or more chords.'
+      : `Same notes as ${name(other)}` + (top.r-third.r<0.06 ? `. Could also be ${name(third)}.` : '');
     const scale=(best.maj?MAJS:MINS).map(s=>(s+best.t)%12);
     bars.forEach((b,i)=>{ b.className='bar'+(i===best.t?' tonic':scale.includes(i)?' in':''); });
   }
@@ -868,7 +881,7 @@ button:focus-visible{outline:3px solid var(--early); outline-offset:2px}
   async function startListen(){
     ensureCtx();
     if(!(await startMic())) return;
-    listening=true; lOn=[]; mul=1; tickN=0; chromaAcc.fill(0); chromaFrames=0; lStart=ctx.currentTime;
+    listening=true; lOn=[]; mul=1; tickN=0; chromaAcc.fill(0); bassAcc.fill(0); chromaFrames=0; lStart=ctx.currentTime;
     renderRhythm(null); $('lvKey').textContent='–'; updateKey();
     document.body.classList.add('listening');
     $('listenBtn').textContent='Stop';
